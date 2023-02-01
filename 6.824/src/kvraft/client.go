@@ -7,6 +7,7 @@ import "math/big"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
+	lastLeader int
 	// You will have to modify this struct.
 }
 
@@ -37,9 +38,19 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-
 	// You will have to modify this function.
-	return ""
+	index:=ck.lastLeader
+	for{
+		args:=GetArgs{key}
+		reply:=GetReply{}
+		ok:=ck.servers[index].Call("KVServer.Get",&args,&reply)
+		if ok&&!reply.WrongLeader{
+			ck.lastLeader=index
+			DPrintf("[kvSever],get key:%v,replay.value:%v \n",key,reply.Value)
+			return reply.Value
+		}
+		index=(index+1)%len(ck.servers)
+	}
 }
 
 //
@@ -54,6 +65,21 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	index:=ck.lastLeader
+	for{
+		args:=PutAppendArgs{
+			key,
+			value,
+			op,
+		}
+		reply:=PutAppendReply{}
+		ok:=ck.servers[index].Call("KVServer.PutAppend",&args,&reply)
+		if ok&&!reply.WrongLeader{
+			ck.lastLeader=index
+			return
+		}
+		index=(index+1)%len(ck.servers)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

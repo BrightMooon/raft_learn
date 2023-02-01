@@ -135,6 +135,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := rf.currentTerm
 	isLeader := (rf.state == Leader)
+	DPrintf(" Raft-node:%v,isLeader:%v, request from kvServer,applyMsg:%v",rf.me,isLeader,command)
 	if isLeader {
 		//next command  index
 		index = rf.getLastLogIndex() + 1
@@ -525,7 +526,8 @@ func (rf *Raft) updateLastAppplied() {
 			Command:      curLog.Command,
 			CommandIndex: rf.lastApplied,
 		}
-		//DPrintf("send msg (%v),applyMsg:%v,len:%v",rf.me,applyMsg,len(rf.applyCh))
+		//TODO 最终raft完成数据一致性，写入op日志的地方
+		DPrintf("Raft-node:%v,applych write ApplyMsg:%v,len:%v",rf.me,applyMsg,len(rf.applyCh))
 		rf.applyCh <- applyMsg
 	}
 }

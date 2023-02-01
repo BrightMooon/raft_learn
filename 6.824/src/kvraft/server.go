@@ -1,15 +1,16 @@
 package kvraft
 
 import (
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
 	"log"
 	"sync"
 	"sync/atomic"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -18,11 +19,14 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
+//发送给Raft的command
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	OpType string
+	Key    string
+	Value  string
 }
 
 type KVServer struct {
@@ -35,15 +39,61 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	//数据保持的地方 key:index  value:msg
+	opKey2ValueMapDB map[string]string
+	//key:index ,value:chan op
+	logIndex2MsgOpChanMap map[int]chan Op
 }
-
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	originOp := Op{"Get", args.Key, ""}
+	reply.WrongLeader = true
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		return
+	}
+	index, _, isLeader := kv.rf.Start(originOp)
+	if !isLeader {
+		return
+	}
+	//从raft获取command 监听获取index对应的 channel
+	opChan := kv.getOpChanIfAbsent(index)
+	op := <-opChan
+	if equalOp(op, originOp) {
+		reply.WrongLeader = false
+		reply.Value = kv.opKey2ValueMapDB[op.Key]
+	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	reply.WrongLeader = true
+	originOp := Op{args.Op, args.Key, args.Value}
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		return
+	}
+	index, _, isLeader := kv.rf.Start(originOp)
+	if !isLeader {
+		return
+	}
+	opChan := kv.getOpChanIfAbsent(index)
+	op := <-opChan
+	if equalOp(op, originOp) {
+		reply.WrongLeader = false
+		return
+	}
+}
+
+func (kv *KVServer) getOpChanIfAbsent(logIndex int) chan Op {
+	if _, ok := kv.logIndex2MsgOpChanMap[logIndex]; !ok {
+		kv.logIndex2MsgOpChanMap[logIndex] = make(chan Op, 1)
+	}
+	return kv.logIndex2MsgOpChanMap[logIndex]
+}
+func equalOp(a Op, b Op) bool {
+	return a.Key == b.Key && a.OpType == b.OpType && a.Value == b.Value
 }
 
 //
@@ -93,9 +143,24 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
+	//TODO 启动一个raft服务开启命令日志同步
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+	kv.opKey2ValueMapDB = make(map[string]string)
+	kv.logIndex2MsgOpChanMap = make(map[int]chan Op)
 	// You may need initialization code here.
-
+	go func() {
+		for applyMsg := range kv.applyCh {
+			opRaftResponse := applyMsg.Command.(Op)
+			switch opRaftResponse.OpType {
+			case "Put":
+				kv.opKey2ValueMapDB[opRaftResponse.Key]=opRaftResponse.Value
+			case "Append":
+				kv.opKey2ValueMapDB[opRaftResponse.Key]+=opRaftResponse.Value
+			}
+			commandIndex := applyMsg.CommandIndex
+			opChan := kv.getOpChanIfAbsent(commandIndex)
+			opChan <- opRaftResponse
+		}
+	}()
 	return kv
 }
